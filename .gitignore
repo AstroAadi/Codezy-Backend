@@ -1,0 +1,28 @@
+# Maven build folder
+target/
+
+# Eclipse/IntelliJ IDEA files
+*.iml
+*.ipr
+*.iws
+.idea/
+.project
+.classpath
+.settings/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Maven Wrapper
+.mvn/wrapper/maven-wrapper.jar
+
+# Temporary files
+*.tmp
+*.bak
+
+# Spring Boot specific
+spring-boot-*.jar
