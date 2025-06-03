@@ -1,0 +1,5 @@
+# Leave target/ in build context
+.git
+.idea
+*.iml
+node_modules/
