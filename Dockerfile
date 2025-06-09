@@ -1,23 +1,25 @@
-# Use Java 17 base image with build tools
 FROM eclipse-temurin:17-jdk as build
 
 WORKDIR /app
 
 # Copy Maven wrapper and make it executable
+COPY .mvn/ .mvn/
 COPY mvnw .
-COPY .mvn .mvn
 COPY pom.xml .
 
-RUN chmod +x mvnw \
- && ./mvnw dependency:go-offline
+# Make mvnw executable
+RUN chmod +x ./mvnw
 
-# Copy the rest of your project
+# Download dependencies
+RUN ./mvnw dependency:go-offline -B
+
+# Copy source code
 COPY src ./src
 
-# Package the Spring Boot app
-RUN ./mvnw package -DskipTests
+# Package the application
+RUN ./mvnw package -DskipTests -B
 
-# Final image for running the jar
+# ---- Final image ----
 FROM eclipse-temurin:17-jre
 
 WORKDIR /app
