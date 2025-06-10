@@ -11,30 +11,30 @@ import java.util.*;
 @Service
 public class CodeRunnerService {
 
-    public String runCode(String code, String language, String input, String fileName) {
-        try {
-            if (!isDockerAvailable()) {
-                return "⚠️ Docker is not available in this environment. Code execution is disabled.";
-            }
-
-            String folder = Files.createTempDirectory("code-").toFile().getAbsolutePath();
-            Path filePath = Path.of(folder, fileName);
-            Files.write(filePath, code.getBytes(StandardCharsets.UTF_8));
-            String result = executeInDocker(fileName, language, folder, code, input);
-            return result;
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
+ public String runCode(String code, String language, String input, String fileName) {
+    try {
+        if (!isDockerAvailable()) {
+            return "⚠️ Docker is not available in this environment. Code execution is disabled.";
         }
-    }
 
-    private boolean isDockerAvailable() {
-        try {
-            Process process = new ProcessBuilder("docker", "--version").start();
-            return process.waitFor() == 0;
-        } catch (Exception e) {
-            return false;
-        }
+        String folder = Files.createTempDirectory("code-").toFile().getAbsolutePath();
+        Path filePath = Path.of(folder, fileName);
+        Files.write(filePath, code.getBytes(StandardCharsets.UTF_8));
+        String result = executeInDocker(fileName, language, folder, code, input);
+        return result;
+    } catch (Exception e) {
+        return "Error: " + e.getMessage();
     }
+}
+
+private boolean isDockerAvailable() {
+    try {
+        Process process = new ProcessBuilder("docker", "--version").start();
+        return process.waitFor() == 0;
+    } catch (Exception e) {
+        return false;
+    }
+}
 
 
     private String executeInDocker(String fileName, String language, String folder, String code, String input) throws IOException, InterruptedException {
