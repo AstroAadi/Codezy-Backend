@@ -1,28 +1,29 @@
-
 FROM eclipse-temurin:17-jdk as build
 
 WORKDIR /app
 
-# Copy Maven wrapper and pom
-COPY mvnw ./
-COPY .mvn .mvn
-COPY pom.xml ./
-RUN ./mvnw dependency:go-offline
+# Copy Maven wrapper and make it executable
+COPY .mvn/ .mvn/
+COPY mvnw .
+COPY pom.xml .
 
-# Copy the rest of the source
+# Make mvnw executable
+RUN chmod +x ./mvnw
+
+# Download dependencies
+RUN ./mvnw dependency:go-offline -B
+
+# Copy source code
 COPY src ./src
 
-# Package the app
-RUN ./mvnw package -DskipTests
+# Package the application
+RUN ./mvnw package -DskipTests -B
 
-# Second stage - lighter runtime image
+# ---- Final image ----
 FROM eclipse-temurin:17-jre
 
 WORKDIR /app
 
-# Copy the jar from the build stage
 COPY --from=build /app/target/*.jar app.jar
 
-# Run the jar
 ENTRYPOINT ["java", "-jar", "app.jar"]
-

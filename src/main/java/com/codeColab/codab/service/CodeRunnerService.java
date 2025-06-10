@@ -13,18 +13,29 @@ public class CodeRunnerService {
 
     public String runCode(String code, String language, String input, String fileName) {
         try {
-            System.out.println("Starting code execution for language: " + language + ", fileName: " + fileName);
+            if (!isDockerAvailable()) {
+                return "⚠️ Docker is not available in this environment. Code execution is disabled.";
+            }
+
             String folder = Files.createTempDirectory("code-").toFile().getAbsolutePath();
             Path filePath = Path.of(folder, fileName);
             Files.write(filePath, code.getBytes(StandardCharsets.UTF_8));
             String result = executeInDocker(fileName, language, folder, code, input);
-            System.out.println("Code execution completed with result length: " + (result != null ? result.length() : "null"));
             return result;
         } catch (Exception e) {
-            e.printStackTrace();
             return "Error: " + e.getMessage();
         }
     }
+
+    private boolean isDockerAvailable() {
+        try {
+            Process process = new ProcessBuilder("docker", "--version").start();
+            return process.waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
 
     private String executeInDocker(String fileName, String language, String folder, String code, String input) throws IOException, InterruptedException {
         Path filePath = Path.of(folder, fileName);
