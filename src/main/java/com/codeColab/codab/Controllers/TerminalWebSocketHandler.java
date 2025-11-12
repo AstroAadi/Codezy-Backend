@@ -9,10 +9,9 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.codeColab.codab.service.CodeRunnerService;
+import com.pty4j.PtyProcess;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -57,7 +56,7 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
             JsonNode node = objectMapper.readTree(message.getPayload());
             logger.info("📦 Parsed JSON - type: {}", node.has("type") ? node.get("type").asText() : "N/A");
 
-            // --- Handle interactive terminal messages from frontend ---
+            // --- Handle interactive terminal messages from frontend (JPty) ---
             if (node.has("type") && "terminal".equals(node.get("type").asText())) {
                 logger.info("🖥️ Processing terminal message");
 
@@ -67,7 +66,7 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                 logger.info("🔍 startShell: {}, command: '{}'", startShell, command);
 
                 if (startShell) {
-                    logger.info("🚀 Starting new interactive shell");
+                    logger.info("🚀 Starting new interactive shell (JPty)");
 
                     // Determine project folder
                     Path projectFolder;
@@ -81,7 +80,7 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                         // TODO: implement unzip logic if frontend sends zipped project bytes/base64
                         logger.warn("⚠️ Project zip handling not yet implemented");
                     } else {
-                        projectFolder = Files.createTempDirectory("react-project-");
+                        projectFolder = Files.createTempDirectory("terminal-project-");
                         logger.info("📁 Created temp project folder: {}", projectFolder);
                     }
 
@@ -98,7 +97,7 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                         }
                     }
 
-                    // If frontend provided projectFiles (map of relativePath -> content), write them into projectFolder
+                    // If frontend provided projectFiles (map of relativePath -> content), write them
                     if (node.has("projectFiles") && node.get("projectFiles").isObject()) {
                         try {
                             logger.info("📥 Writing projectFiles into project folder");
@@ -111,7 +110,9 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                                 if (target.getParent() != null) {
                                     Files.createDirectories(target.getParent());
                                 }
-                                Files.writeString(target, content, StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+                                Files.writeString(target, content, StandardCharsets.UTF_8,
+                                        java.nio.file.StandardOpenOption.CREATE,
+                                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
                             }
                             logger.info("✅ Written {} files into {}", node.get("projectFiles").size(), projectFolder);
                         } catch (Exception e) {
@@ -120,83 +121,73 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                         }
                     }
 
-                    // Start the interactive shell
+                    // Start the interactive shell using JPty
                     try {
-                        Process shell = codeRunnerService.startInteractiveShell(sessionId, projectFolder);
+                        PtyProcess ptyProcess = codeRunnerService.startInteractiveShell(sessionId, projectFolder);
 
-                        if (Objects.nonNull(shell) && shell.getOutputStream() != null) {
-                            sessionInputs.put(sessionId, shell.getOutputStream());
-                            logger.info("✅ Stored shell output stream for session: {}", sessionId);
+                        if (Objects.nonNull(ptyProcess) && ptyProcess.getOutputStream() != null) {
+                            sessionInputs.put(sessionId, ptyProcess.getOutputStream());
+                            logger.info("✅ Stored PTY output stream for session: {}", sessionId);
                         } else {
-                            logger.error("❌ Shell or output stream is null");
+                            logger.error("❌ PTY process or output stream is null");
                             session.sendMessage(new TextMessage("❌ Failed to start shell\n"));
                             return;
                         }
 
                         // Send welcome messages
-                        session.sendMessage(new TextMessage("✅ Interactive shell started in Docker\n"));
-                        session.sendMessage(new TextMessage("📁 Working directory: /project\n"));
+                        session.sendMessage(new TextMessage("✅ Interactive terminal started (JPty)\n"));
+                        session.sendMessage(new TextMessage("📁 Working directory: " + projectFolder.toAbsolutePath() + "\n"));
                         session.sendMessage(new TextMessage("💡 Type your commands below:\n\n"));
                         logger.info("✅ Welcome messages sent");
 
-                        // Start thread to stream stdout back to the frontend
+                        // Start thread to stream PTY output back to the frontend
                         new Thread(() -> {
-                            logger.info("🔄 Starting stdout stream thread for session: {}", sessionId);
-                            try (BufferedReader reader = codeRunnerService.getShellOutput(sessionId)) {
-                                if (reader == null) {
-                                    logger.error("❌ Shell output reader is null");
+                            logger.info("🔄 Starting PTY output stream thread for session: {}", sessionId);
+                            try {
+                                InputStream stdout = codeRunnerService.getShellOutputStream(sessionId);
+                                if (stdout == null) {
+                                    logger.error("❌ Shell output stream is null");
                                     return;
                                 }
 
-                                String line;
-                                int lineCount = 0;
-                                while ((line = reader.readLine()) != null) {
-                                    lineCount++;
-                                    logger.info("📤 DOCKER OUTPUT [{}] Line {}: {}", sessionId, lineCount, line);
+                                byte[] buffer = new byte[8192];
+                                int bytesRead;
+                                int totalBytes = 0;
+
+                                while ((bytesRead = stdout.read(buffer)) != -1) {
+                                    totalBytes += bytesRead;
+                                    String output = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
+
+                                    logger.debug("📤 PTY OUTPUT [{}] {} bytes: {}", sessionId, bytesRead,
+                                            output.length() > 100 ? output.substring(0, 100) + "..." : output);
+
                                     try {
-                                        session.sendMessage(new TextMessage(line + "\n"));
+                                        session.sendMessage(new TextMessage(output));
                                     } catch (Exception e) {
                                         logger.error("❌ Error sending message to WebSocket: {}", e.getMessage());
                                         break;
                                     }
                                 }
-                                logger.info("🏁 stdout stream ended for session: {} (total lines: {})", sessionId, lineCount);
-                            } catch (Exception e) {
-                                logger.error("❌ Error streaming shell output: {}", e.getMessage(), e);
-                            }
-                        }, "ws-stdout-" + sessionId).start();
 
-                        // Start thread to stream stderr back to the frontend
-                        new Thread(() -> {
-                            logger.info("🔄 Starting stderr stream thread for session: {}", sessionId);
-                            try (BufferedReader reader = codeRunnerService.getShellError(sessionId)) {
-                                if (reader == null) {
-                                    logger.warn("⚠️ Shell error reader is null");
-                                    return;
-                                }
-
-                                String line;
-                                int errorCount = 0;
-                                while ((line = reader.readLine()) != null) {
-                                    errorCount++;
-                                    logger.warn("⚠️ DOCKER ERROR [{}] Line {}: {}", sessionId, errorCount, line);
-                                    try {
-                                        session.sendMessage(new TextMessage("[ERROR] " + line + "\n"));
-                                    } catch (Exception e) {
-                                        logger.error("❌ Error sending error message to WebSocket: {}", e.getMessage());
-                                        break;
-                                    }
-                                }
-                                logger.info("🏁 stderr stream ended for session: {} (total errors: {})", sessionId, errorCount);
+                                logger.info("🏁 PTY output stream ended for session: {} (total bytes: {})", sessionId, totalBytes);
+                                session.sendMessage(new TextMessage("\n[Terminal session ended]\n"));
                             } catch (Exception e) {
-                                logger.error("❌ Error streaming shell errors: {}", e.getMessage(), e);
+                                logger.error("❌ Error streaming PTY output: {}", e.getMessage(), e);
                             }
-                        }, "ws-stderr-" + sessionId).start();
+                        }, "ws-pty-output-" + sessionId).start();
+
+                        // Handle terminal resize events
+                        if (node.has("cols") && node.has("rows")) {
+                            int cols = node.get("cols").asInt(120);
+                            int rows = node.get("rows").asInt(30);
+                            codeRunnerService.resizeTerminal(sessionId, cols, rows);
+                            logger.info("📐 Terminal resized to {}x{}", cols, rows);
+                        }
 
                         // If an initial command is provided, send it after a brief delay
                         if (!command.isEmpty()) {
-                            logger.info("⏱️ Waiting 1 second before sending initial command...");
-                            Thread.sleep(1000); // Give shell time to initialize
+                            logger.info("⏱️ Waiting 500ms before sending initial command...");
+                            Thread.sleep(500); // Give shell time to initialize
                             logger.info("📨 Sending initial command: '{}'", command);
                             codeRunnerService.sendToShell(sessionId, command);
                         }
@@ -205,6 +196,13 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                         logger.error("❌ Failed to start shell: {}", e.getMessage(), e);
                         session.sendMessage(new TextMessage("❌ Error starting shell: " + e.getMessage() + "\n"));
                     }
+
+                } else if (node.has("resize") && node.get("resize").asBoolean()) {
+                    // Handle terminal resize
+                    int cols = node.path("cols").asInt(120);
+                    int rows = node.path("rows").asInt(30);
+                    logger.info("📐 Resizing terminal: {}x{}", cols, rows);
+                    codeRunnerService.resizeTerminal(sessionId, cols, rows);
 
                 } else if (!command.isEmpty()) {
                     // Send command to existing shell
@@ -228,8 +226,8 @@ public class TerminalWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            // Non-terminal messages are treated as single-file code execution requests
-            logger.info("💻 Processing code execution request");
+            // Non-terminal messages are treated as single-file code execution requests (Docker-based)
+            logger.info("💻 Processing code execution request (Docker)");
 
             String code = node.has("code") ? node.get("code").asText() : "";
             String fileName = node.has("fileName") ? node.get("fileName").asText() : "Main.txt";

@@ -3,6 +3,9 @@ package com.codeColab.codab.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import com.pty4j.PtyProcess;
+import com.pty4j.PtyProcessBuilder;
+import com.pty4j.WinSize;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -14,25 +17,27 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CodeRunnerService {
     private static final Logger logger = LoggerFactory.getLogger(CodeRunnerService.class);
 
-    // Store terminal sessions with their associated processes
+    // Store terminal sessions with their associated PTY processes
     private final Map<String, TerminalSession> terminalSessions = new ConcurrentHashMap<>();
 
-    // Inner class to hold session data
+    // Inner class to hold PTY session data
     private static class TerminalSession {
-        Process process;
+        PtyProcess ptyProcess;
         OutputStream stdin;
-        BufferedReader stdout;
-        BufferedReader stderr;
+        InputStream stdout;
         String workingDirectory;
+        Thread outputThread;
+        Thread errorThread;
 
-        TerminalSession(Process process, String workingDirectory) {
-            this.process = process;
-            this.stdin = process.getOutputStream();
-            this.stdout = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-            this.stderr = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
+        TerminalSession(PtyProcess ptyProcess, String workingDirectory) {
+            this.ptyProcess = ptyProcess;
+            this.stdin = ptyProcess.getOutputStream();
+            this.stdout = ptyProcess.getInputStream();
             this.workingDirectory = workingDirectory;
         }
     }
+
+    // ==================== CODE EXECUTION METHODS (Docker-based, unchanged) ====================
 
     public String runCode(String code, String language, String input, String fileName) {
         logger.info("🎯 runCode called - fileName: {}, language: {}, hasInput: {}", fileName, language, input != null && !input.isEmpty());
@@ -295,106 +300,79 @@ public class CodeRunnerService {
         }
     }
 
+    // ==================== TERMINAL METHODS (JPty-based, NEW) ====================
+
     /**
-     * Start an interactive shell for a project directory (React or multi-file project).
-     * This creates a proper interactive bash shell with TTY support.
+     * Start an interactive shell using JPty for a project directory.
+     * This creates a native PTY with proper terminal support.
      */
-    public Process startInteractiveShell(String sessionId, Path projectFolder) {
-        logger.info("🎯 startInteractiveShell called - sessionId: {}, projectFolder: {}", sessionId, projectFolder);
+    public PtyProcess startInteractiveShell(String sessionId, Path projectFolder) {
+        logger.info("🎯 startInteractiveShell (JPty) called - sessionId: {}, projectFolder: {}", sessionId, projectFolder);
 
         try {
-            String folder = projectFolder.toAbsolutePath().toString();
+            String workingDir = projectFolder.toAbsolutePath().toString();
 
-            // Create a Dockerfile with all necessary tools
-            String dockerfile = "FROM ubuntu:22.04\n" +
-                    "ENV DEBIAN_FRONTEND=noninteractive\n" +
-                    "RUN apt-get update && apt-get install -y \\\n" +
-                    "    python3 \\\n" +
-                    "    python3-pip \\\n" +
-                    "    openjdk-17-jdk \\\n" +
-                    "    gcc \\\n" +
-                    "    g++ \\\n" +
-                    "    make \\\n" +
-                    "    nodejs \\\n" +
-                    "    npm \\\n" +
-                    "    curl \\\n" +
-                    "    wget \\\n" +
-                    "    nano \\\n" +
-                    "    vim \\\n" +
-                    "    git \\\n" +
-                    "    bash \\\n" +
-                    "    && apt-get clean\n" +
-                    "WORKDIR /project\n" +
-                    "COPY . /project/\n" +
-                    "CMD [\"/bin/bash\"]\n";
-
-            Files.writeString(projectFolder.resolve("Dockerfile"), dockerfile, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            logger.info("📝 Created Dockerfile for session: {}", sessionId);
-
-            // Build Docker image
-            String imageName = "project-terminal-" + sessionId;
-            logger.info("🔨 Building Docker image: {}", imageName);
-
-            Process build = new ProcessBuilder("docker", "build", "-t", imageName, folder)
-                    .redirectErrorStream(true)
-                    .start();
-
-            // Log build output
-            try (BufferedReader buildReader = new BufferedReader(new InputStreamReader(build.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = buildReader.readLine()) != null) {
-                    logger.debug("🔨 Build output: {}", line);
-                }
+            // Ensure the working directory exists
+            if (!Files.exists(projectFolder)) {
+                Files.createDirectories(projectFolder);
+                logger.info("📁 Created project folder: {}", projectFolder);
             }
 
-            int buildExitCode = build.waitFor();
-            logger.info("🔨 Build completed with exit code: {}", buildExitCode);
+            // Determine the shell command based on OS
+            String[] command;
+            String os = System.getProperty("os.name").toLowerCase();
 
-            if (buildExitCode != 0) {
-                logger.error("❌ Docker build failed for session: {}", sessionId);
-                throw new RuntimeException("Failed to build Docker image");
+            if (os.contains("win")) {
+                // Windows: use cmd.exe or PowerShell
+                command = new String[]{"cmd.exe"};
+                logger.info("🪟 Detected Windows OS, using cmd.exe");
+            } else {
+                // Unix/Linux/Mac: use bash
+                command = new String[]{"/bin/bash", "-l"};
+                logger.info("🐧 Detected Unix-like OS, using bash");
             }
 
-            // Start interactive bash shell in Docker with proper flags
-            List<String> runCmd = Arrays.asList(
-                    "docker", "run",
-                    "--rm",           // Remove container when it exits
-                    "-i",             // Keep STDIN open
-                    "-w", "/project", // Working directory
-                    imageName,
-                    "/bin/bash",      // Start bash shell
-                    "-c",             // Execute commands
-                    "exec bash"       // Execute bash interactively
-            );
+            // Configure environment variables
+            Map<String, String> envVars = new HashMap<>(System.getenv());
+            envVars.put("TERM", "xterm-256color");
+            envVars.put("PS1", "\\u@\\h:\\w$ "); // Custom prompt
 
-            logger.info("🚀 Starting shell with command: {}", String.join(" ", runCmd));
+            logger.info("🔧 Environment variables configured");
 
-            Process shell = new ProcessBuilder(runCmd)
-                    .redirectErrorStream(false) // Keep stdout and stderr separate
-                    .start();
+            // Build the PTY process
+            PtyProcessBuilder builder = new PtyProcessBuilder(command)
+                    .setDirectory(workingDir)
+                    .setEnvironment(envVars)
+                    .setInitialColumns(120)
+                    .setInitialRows(30)
+                    .setConsole(false)
+                    .setCygwin(false);
+
+            logger.info("🔨 Building PTY process with command: {}", Arrays.toString(command));
+
+            // Start the PTY process
+            PtyProcess ptyProcess = builder.start();
+            logger.info("✅ PTY process started successfully");
 
             // Create and store terminal session
-            TerminalSession session = new TerminalSession(shell, folder);
+            TerminalSession session = new TerminalSession(ptyProcess, workingDir);
             terminalSessions.put(sessionId, session);
+            logger.info("💾 Stored terminal session for sessionId: {}", sessionId);
 
-            logger.info("✅ Interactive shell started for session: {}", sessionId);
+            // Give the shell a moment to initialize
+            Thread.sleep(200);
 
-            // Wait a moment for shell to initialize
-            Thread.sleep(500);
+            logger.info("✅ Interactive shell (JPty) started for session: {}", sessionId);
+            return ptyProcess;
 
-            // Send an initial command to verify shell is ready
-            sendToShell(sessionId, "echo 'Shell ready'");
-
-            return shell;
         } catch (Exception e) {
-            logger.error("❌ Failed to start interactive shell for session {}: {}", sessionId, e.getMessage(), e);
+            logger.error("❌ Failed to start interactive shell (JPty) for session {}: {}", sessionId, e.getMessage(), e);
             throw new RuntimeException("Failed to start interactive shell: " + e.getMessage(), e);
         }
     }
 
     /**
-     * Send a command to an active shell session
+     * Send a command to an active PTY shell session
      */
     public void sendToShell(String sessionId, String command) throws IOException {
         logger.info("📨 sendToShell - sessionId: {}, command: '{}'", sessionId, command);
@@ -423,10 +401,10 @@ public class CodeRunnerService {
     }
 
     /**
-     * Get the output reader for a shell session
+     * Get the output stream (for reading) for a shell session
      */
-    public BufferedReader getShellOutput(String sessionId) {
-        logger.debug("📖 getShellOutput - sessionId: {}", sessionId);
+    public InputStream getShellOutputStream(String sessionId) {
+        logger.debug("📖 getShellOutputStream - sessionId: {}", sessionId);
 
         TerminalSession session = terminalSessions.get(sessionId);
         if (session != null) {
@@ -438,17 +416,28 @@ public class CodeRunnerService {
     }
 
     /**
-     * Get the error reader for a shell session
+     * Get a BufferedReader for shell output (backward compatibility)
+     */
+    public BufferedReader getShellOutput(String sessionId) {
+        logger.debug("📖 getShellOutput - sessionId: {}", sessionId);
+
+        InputStream inputStream = getShellOutputStream(sessionId);
+        if (inputStream != null) {
+            return new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+        }
+
+        logger.warn("⚠️ No input stream found for sessionId: {}", sessionId);
+        return null;
+    }
+
+    /**
+     * Get the error reader for a shell session (PTY doesn't separate stderr)
      */
     public BufferedReader getShellError(String sessionId) {
         logger.debug("📖 getShellError - sessionId: {}", sessionId);
 
-        TerminalSession session = terminalSessions.get(sessionId);
-        if (session != null) {
-            return session.stderr;
-        }
-
-        logger.warn("⚠️ No session found for sessionId: {}", sessionId);
+        // PTY combines stdout and stderr, so return null
+        // This maintains backward compatibility
         return null;
     }
 
@@ -457,9 +446,28 @@ public class CodeRunnerService {
      */
     public boolean isShellAlive(String sessionId) {
         TerminalSession session = terminalSessions.get(sessionId);
-        boolean alive = session != null && session.process != null && session.process.isAlive();
+        boolean alive = session != null && session.ptyProcess != null && session.ptyProcess.isAlive();
         logger.debug("🔍 isShellAlive - sessionId: {}, alive: {}", sessionId, alive);
         return alive;
+    }
+
+    /**
+     * Resize the terminal window
+     */
+    public void resizeTerminal(String sessionId, int cols, int rows) {
+        logger.info("📐 resizeTerminal - sessionId: {}, cols: {}, rows: {}", sessionId, cols, rows);
+
+        TerminalSession session = terminalSessions.get(sessionId);
+        if (session != null && session.ptyProcess != null) {
+            try {
+                session.ptyProcess.setWinSize(new WinSize(cols, rows));
+                logger.info("✅ Terminal resized successfully");
+            } catch (Exception e) {
+                logger.error("❌ Failed to resize terminal: {}", e.getMessage(), e);
+            }
+        } else {
+            logger.warn("⚠️ No session found for resize request: {}", sessionId);
+        }
     }
 
     /**
@@ -471,18 +479,26 @@ public class CodeRunnerService {
         TerminalSession session = terminalSessions.get(sessionId);
         if (session != null) {
             try {
+                // Stop output threads if any
+                if (session.outputThread != null && session.outputThread.isAlive()) {
+                    session.outputThread.interrupt();
+                }
+                if (session.errorThread != null && session.errorThread.isAlive()) {
+                    session.errorThread.interrupt();
+                }
+
+                // Close streams
                 if (session.stdin != null) {
                     session.stdin.close();
                 }
                 if (session.stdout != null) {
                     session.stdout.close();
                 }
-                if (session.stderr != null) {
-                    session.stderr.close();
-                }
-                if (session.process != null && session.process.isAlive()) {
-                    session.process.destroy();
-                    logger.info("🛑 Process destroyed for session: {}", sessionId);
+
+                // Destroy PTY process
+                if (session.ptyProcess != null && session.ptyProcess.isAlive()) {
+                    session.ptyProcess.destroy();
+                    logger.info("🛑 PTY process destroyed for session: {}", sessionId);
                 }
             } catch (Exception e) {
                 logger.error("⚠️ Error closing shell session {}: {}", sessionId, e.getMessage());
