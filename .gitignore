@@ -26,3 +26,4 @@ Thumbs.db
 
 # Spring Boot specific
 spring-boot-*.jar
+src/main/resources/application.properties
