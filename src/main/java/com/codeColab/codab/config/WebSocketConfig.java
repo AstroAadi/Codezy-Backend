@@ -1,45 +1,3 @@
-//package com.codeColab.codab.config;
-//
-//import com.codeColab.codab.Controllers.TerminalWebSocketHandler;
-//import com.codeColab.codab.service.CodeRunnerService;
-//import org.springframework.beans.factory.annotation.Autowired;
-//import org.springframework.context.annotation.Configuration;
-//import org.springframework.messaging.simp.config.MessageBrokerRegistry;
-//import org.springframework.web.socket.config.annotation.*;
-//
-//@Configuration
-//@EnableWebSocketMessageBroker
-//@EnableWebSocket
-//public class WebSocketConfig implements WebSocketMessageBrokerConfigurer, WebSocketConfigurer {
-//
-//    private final CodeRunnerService codeRunnerService;
-//
-//    @Autowired
-//    public WebSocketConfig(CodeRunnerService codeRunnerService) {
-//        this.codeRunnerService = codeRunnerService;
-//    }
-//
-//    @Override
-//    public void configureMessageBroker(MessageBrokerRegistry config) {
-//        config.enableSimpleBroker("/topic");
-//        config.setApplicationDestinationPrefixes("/app");
-//    }
-//
-//    @Override
-//    public void registerStompEndpoints(StompEndpointRegistry registry) {
-//    // Allow connections from localhost during development and from the deployed web app
-//    registry.addEndpoint("/ws").setAllowedOrigins("*")
-//        .withSockJS();
-//    }
-//
-//    @Override
-//    public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-//        // Pass the codeRunnerService to the TerminalWebSocketHandler constructor
-//        registry.addHandler(new TerminalWebSocketHandler(codeRunnerService), "/terminal").setAllowedOrigins("*");
-//    }
-//}
-//
-
 package com.codeColab.codab.config;
 
 import com.codeColab.codab.Controllers.TerminalWebSocketHandler;
@@ -69,25 +27,19 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer, WebSoc
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-
-        registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns(
-                        "http://localhost:4200",
-                        "http://localhost:5173",
-                        "https://your-production-domain.com"
-                ) // ✅ Use origin patterns instead of "*"
+        registry.addEndpoint("/ws").setAllowedOrigins("https://codezy-e98c8.web.app")
                 .withSockJS();
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-
-        registry.addHandler(new TerminalWebSocketHandler(codeRunnerService), "/terminal")
-                .setAllowedOriginPatterns(
-                        "http://localhost:4200",
-                        "http://localhost:5173",
-                        "https://your-production-domain.com"
-                ); // ✅ use patterns
+        // Pass the codeRunnerService to the TerminalWebSocketHandler constructor
+        registry.addHandler(new TerminalWebSocketHandler(codeRunnerService), "/terminal").setAllowedOrigins("*");
     }
 }
+
+
+
+
+
 
