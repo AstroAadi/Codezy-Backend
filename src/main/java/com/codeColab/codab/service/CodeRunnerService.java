@@ -3,39 +3,15 @@ package com.codeColab.codab.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import com.pty4j.PtyProcess;
-import com.pty4j.PtyProcessBuilder;
-import com.pty4j.WinSize;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class CodeRunnerService {
     private static final Logger logger = LoggerFactory.getLogger(CodeRunnerService.class);
-
-    // Store terminal sessions with their associated PTY processes
-    private final Map<String, TerminalSession> terminalSessions = new ConcurrentHashMap<>();
-
-    // Inner class to hold PTY session data
-    private static class TerminalSession {
-        PtyProcess ptyProcess;
-        OutputStream stdin;
-        InputStream stdout;
-        String workingDirectory;
-        Thread outputThread;
-        Thread errorThread;
-
-        TerminalSession(PtyProcess ptyProcess, String workingDirectory) {
-            this.ptyProcess = ptyProcess;
-            this.stdin = ptyProcess.getOutputStream();
-            this.stdout = ptyProcess.getInputStream();
-            this.workingDirectory = workingDirectory;
-        }
-    }
 
     // ==================== CODE EXECUTION METHODS (Docker-based, unchanged) ====================
 
@@ -300,242 +276,14 @@ public class CodeRunnerService {
         }
     }
 
-    // ==================== TERMINAL METHODS (JPty-based, NEW) ====================
+    // ==================== TERMINAL METHODS (Removed - Using WebContainers in Frontend) ====================
 
     /**
-     * Start an interactive shell using JPty for a project directory.
-     * This creates a native PTY with proper terminal support.
+     * Terminal functionality is now handled entirely in the frontend using WebContainers.
+     * No backend terminal sessions needed.
+     *
+     * Backend only handles:
+     * - Code execution in Docker (above methods)
+     * - File storage/retrieval (if needed)
      */
-    public PtyProcess startInteractiveShell(String sessionId, Path projectFolder) {
-        logger.info("🎯 startInteractiveShell (JPty) called - sessionId: {}, projectFolder: {}", sessionId, projectFolder);
-
-        try {
-            String workingDir = projectFolder.toAbsolutePath().toString();
-
-            // Ensure the working directory exists
-            if (!Files.exists(projectFolder)) {
-                Files.createDirectories(projectFolder);
-                logger.info("📁 Created project folder: {}", projectFolder);
-            }
-
-            // Determine the shell command based on OS
-            String[] command;
-            String os = System.getProperty("os.name").toLowerCase();
-
-            if (os.contains("win")) {
-                // Windows: use cmd.exe or PowerShell
-                command = new String[]{"cmd.exe"};
-                logger.info("🪟 Detected Windows OS, using cmd.exe");
-            } else {
-                // Unix/Linux/Mac: use bash
-                command = new String[]{"/bin/bash", "-l"};
-                logger.info("🐧 Detected Unix-like OS, using bash");
-            }
-
-            // Configure environment variables
-            Map<String, String> envVars = new HashMap<>(System.getenv());
-            envVars.put("TERM", "xterm-256color");
-            envVars.put("PS1", "\\u@\\h:\\w$ "); // Custom prompt
-
-            logger.info("🔧 Environment variables configured");
-
-            // Build the PTY process
-            PtyProcessBuilder builder = new PtyProcessBuilder(command)
-                    .setDirectory(workingDir)
-                    .setEnvironment(envVars)
-                    .setInitialColumns(120)
-                    .setInitialRows(30)
-                    .setConsole(false)
-                    .setCygwin(false);
-
-            logger.info("🔨 Building PTY process with command: {}", Arrays.toString(command));
-
-            // Start the PTY process
-            PtyProcess ptyProcess = builder.start();
-            logger.info("✅ PTY process started successfully");
-
-            // Create and store terminal session
-            TerminalSession session = new TerminalSession(ptyProcess, workingDir);
-            terminalSessions.put(sessionId, session);
-            logger.info("💾 Stored terminal session for sessionId: {}", sessionId);
-
-            // Give the shell a moment to initialize
-            Thread.sleep(200);
-
-            logger.info("✅ Interactive shell (JPty) started for session: {}", sessionId);
-            return ptyProcess;
-
-        } catch (Exception e) {
-            logger.error("❌ Failed to start interactive shell (JPty) for session {}: {}", sessionId, e.getMessage(), e);
-            throw new RuntimeException("Failed to start interactive shell: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Send a command to an active PTY shell session
-     */
-    public void sendToShell(String sessionId, String command) throws IOException {
-        logger.info("📨 sendToShell - sessionId: {}, command: '{}'", sessionId, command);
-
-        TerminalSession session = terminalSessions.get(sessionId);
-        if (session == null) {
-            logger.error("❌ No terminal session found for sessionId: {}", sessionId);
-            throw new IOException("No terminal session found for sessionId: " + sessionId);
-        }
-
-        if (session.stdin == null) {
-            logger.error("❌ stdin is null for sessionId: {}", sessionId);
-            throw new IOException("Shell stdin is not available");
-        }
-
-        try {
-            // Write command with newline
-            byte[] commandBytes = (command + "\n").getBytes(StandardCharsets.UTF_8);
-            session.stdin.write(commandBytes);
-            session.stdin.flush();
-            logger.info("✅ Command sent successfully to session: {}", sessionId);
-        } catch (IOException e) {
-            logger.error("❌ Error sending command to session {}: {}", sessionId, e.getMessage(), e);
-            throw e;
-        }
-    }
-
-    /**
-     * Get the output stream (for reading) for a shell session
-     */
-    public InputStream getShellOutputStream(String sessionId) {
-        logger.debug("📖 getShellOutputStream - sessionId: {}", sessionId);
-
-        TerminalSession session = terminalSessions.get(sessionId);
-        if (session != null) {
-            return session.stdout;
-        }
-
-        logger.warn("⚠️ No session found for sessionId: {}", sessionId);
-        return null;
-    }
-
-    /**
-     * Get a BufferedReader for shell output (backward compatibility)
-     */
-    public BufferedReader getShellOutput(String sessionId) {
-        logger.debug("📖 getShellOutput - sessionId: {}", sessionId);
-
-        InputStream inputStream = getShellOutputStream(sessionId);
-        if (inputStream != null) {
-            return new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
-        }
-
-        logger.warn("⚠️ No input stream found for sessionId: {}", sessionId);
-        return null;
-    }
-
-    /**
-     * Get the error reader for a shell session (PTY doesn't separate stderr)
-     */
-    public BufferedReader getShellError(String sessionId) {
-        logger.debug("📖 getShellError - sessionId: {}", sessionId);
-
-        // PTY combines stdout and stderr, so return null
-        // This maintains backward compatibility
-        return null;
-    }
-
-    /**
-     * Check if a shell session exists and is alive
-     */
-    public boolean isShellAlive(String sessionId) {
-        TerminalSession session = terminalSessions.get(sessionId);
-        boolean alive = session != null && session.ptyProcess != null && session.ptyProcess.isAlive();
-        logger.debug("🔍 isShellAlive - sessionId: {}, alive: {}", sessionId, alive);
-        return alive;
-    }
-
-    /**
-     * Resize the terminal window
-     */
-    public void resizeTerminal(String sessionId, int cols, int rows) {
-        logger.info("📐 resizeTerminal - sessionId: {}, cols: {}, rows: {}", sessionId, cols, rows);
-
-        TerminalSession session = terminalSessions.get(sessionId);
-        if (session != null && session.ptyProcess != null) {
-            try {
-                session.ptyProcess.setWinSize(new WinSize(cols, rows));
-                logger.info("✅ Terminal resized successfully");
-            } catch (Exception e) {
-                logger.error("❌ Failed to resize terminal: {}", e.getMessage(), e);
-            }
-        } else {
-            logger.warn("⚠️ No session found for resize request: {}", sessionId);
-        }
-    }
-
-    /**
-     * Close and cleanup a shell session
-     */
-    public void closeShell(String sessionId) {
-        logger.info("🔒 closeShell - sessionId: {}", sessionId);
-
-        TerminalSession session = terminalSessions.get(sessionId);
-        if (session != null) {
-            try {
-                // Stop output threads if any
-                if (session.outputThread != null && session.outputThread.isAlive()) {
-                    session.outputThread.interrupt();
-                }
-                if (session.errorThread != null && session.errorThread.isAlive()) {
-                    session.errorThread.interrupt();
-                }
-
-                // Close streams
-                if (session.stdin != null) {
-                    session.stdin.close();
-                }
-                if (session.stdout != null) {
-                    session.stdout.close();
-                }
-
-                // Destroy PTY process
-                if (session.ptyProcess != null && session.ptyProcess.isAlive()) {
-                    session.ptyProcess.destroy();
-                    logger.info("🛑 PTY process destroyed for session: {}", sessionId);
-                }
-            } catch (Exception e) {
-                logger.error("⚠️ Error closing shell session {}: {}", sessionId, e.getMessage());
-            }
-
-            terminalSessions.remove(sessionId);
-            logger.info("✅ Shell session closed and removed: {}", sessionId);
-        } else {
-            logger.warn("⚠️ No session to close for sessionId: {}", sessionId);
-        }
-    }
-
-    /**
-     * Utility to copy all files from a source directory to a destination directory.
-     */
-    public static void copyDirectory(Path source, Path target) throws IOException {
-        Files.walk(source).forEach(path -> {
-            try {
-                Path relative = source.relativize(path);
-                Path dest = target.resolve(relative);
-                if (Files.isDirectory(path)) {
-                    if (!Files.exists(dest)) {
-                        Files.createDirectories(dest);
-                    }
-                } else {
-                    Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING);
-                }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    /**
-     * Get all active session IDs
-     */
-    public Set<String> getActiveSessionIds() {
-        return new HashSet<>(terminalSessions.keySet());
-    }
 }

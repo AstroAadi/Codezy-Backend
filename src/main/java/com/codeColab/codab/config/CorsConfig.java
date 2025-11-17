@@ -15,7 +15,8 @@ public class CorsConfig {
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(Arrays.asList( "http://localhost:4200",
-                "https://codezy-e98c8.web.app"));
+                "https://codezy-e98c8.web.app",
+                "https://engaging-preimaginary-lawson.ngrok-free.dev"));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(Arrays.asList("*"));
         config.setAllowCredentials(true);

@@ -73,8 +73,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer, WebSoc
         registry.addEndpoint("/ws")
                 .setAllowedOriginPatterns(
                         "http://localhost:4200",
-                        "http://localhost:5173",
-                        "https://your-production-domain.com"
+                        "http://localhost:5173"
                 ) // ✅ Use origin patterns instead of "*"
                 .withSockJS();
     }
@@ -85,8 +84,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer, WebSoc
         registry.addHandler(new TerminalWebSocketHandler(codeRunnerService), "/terminal")
                 .setAllowedOriginPatterns(
                         "http://localhost:4200",
-                        "http://localhost:5173",
-                        "https://your-production-domain.com"
+                        "http://localhost:5173"
                 ); // ✅ use patterns
     }
 }
